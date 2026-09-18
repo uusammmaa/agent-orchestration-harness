@@ -1,0 +1,19 @@
+node_modules/
+.next/
+out/
+build/
+coverage/
+.vercel
+*.tsbuildinfo
+next-env.d.ts
+
+# Secrets, but keep the documented template.
+.env*
+!.env.example
+.DS_Store
+playwright-report/
+test-results/
+blob-report/
+.playwright/
+tsconfig.tsbuildinfo
+dist/
