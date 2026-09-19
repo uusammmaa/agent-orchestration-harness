@@ -128,6 +128,152 @@ export class MemoryStore implements Store {
       this.state.sequenceByRun.set(event.runId, Math.max(this.state.sequenceByRun.get(event.runId) ?? 0, event.sequence));
     }
   }
+
+  /**
+   * The whole store as plain JSON.
+   *
+   * Two uses. A stateless host can hand a snapshot back to the caller and rehydrate from
+   * it on the next request, which is how the hosted console runs the real engine without
+   * a database. And a support engineer can capture a store mid-incident and replay it
+   * locally, which is worth more than any amount of logging.
+   *
+   * Dates are serialised as ISO strings and restored by `restore`.
+   */
+  snapshot(): StoreSnapshot {
+    return JSON.parse(
+      JSON.stringify({
+        runs: [...this.state.runs.values()],
+        tasks: [...this.state.tasks.values()],
+        attempts: [...this.state.attempts.values()],
+        approvals: [...this.state.approvals.values()],
+        events: this.state.events,
+        outbox: [...this.state.outbox.values()],
+        counter: this.state.counter,
+      }),
+    ) as StoreSnapshot;
+  }
+
+  static from(snapshot: StoreSnapshot, idPrefix = "m"): MemoryStore {
+    const store = new MemoryStore(idPrefix);
+    store.restore(snapshot);
+    return store;
+  }
+
+  restore(snapshot: StoreSnapshot): void {
+    const state = emptyState();
+
+    for (const raw of snapshot.runs ?? []) {
+      const run = reviveRun(raw);
+      state.runs.set(run.id, run);
+    }
+    for (const raw of snapshot.tasks ?? []) {
+      const task = reviveTask(raw);
+      state.tasks.set(task.id, task);
+    }
+    for (const raw of snapshot.attempts ?? []) {
+      const attempt = reviveAttempt(raw);
+      state.attempts.set(attempt.id, attempt);
+    }
+    for (const raw of snapshot.approvals ?? []) {
+      const approval = reviveApproval(raw);
+      state.approvals.set(approval.id, approval);
+    }
+    for (const raw of snapshot.outbox ?? []) {
+      const message = reviveOutbox(raw);
+      state.outbox.set(message.id, message);
+    }
+
+    for (const raw of snapshot.events ?? []) {
+      const revived = { ...(raw as unknown as Event), at: date(raw.at) };
+      state.events.push(revived);
+      state.sequenceByRun.set(
+        revived.runId,
+        Math.max(state.sequenceByRun.get(revived.runId) ?? 0, revived.sequence),
+      );
+    }
+
+    // Carry the id counter forward, or a restored store starts handing out ids it has
+    // already used.
+    state.counter = snapshot.counter ?? 0;
+    this.state = state;
+  }
+}
+
+/**
+ * A store serialised to JSON.
+ *
+ * Rows are `Record<string, unknown>` rather than the domain types, because that is
+ * honestly what they are: every `Date` has become a string, and pretending otherwise
+ * would let a caller read `run.createdAt.getTime()` off a snapshot and get a runtime
+ * error. The revivers below are the only place that shape is turned back into a domain
+ * object.
+ */
+export interface StoreSnapshot {
+  runs: SerialisedRow[];
+  tasks: SerialisedRow[];
+  attempts: SerialisedRow[];
+  approvals: SerialisedRow[];
+  events: SerialisedRow[];
+  outbox: SerialisedRow[];
+  counter: number;
+}
+
+type SerialisedRow = Record<string, unknown>;
+
+function date(value: unknown): Date {
+  return new Date(String(value));
+}
+
+function maybeDate(value: unknown): Date | null {
+  return value === null || value === undefined ? null : new Date(String(value));
+}
+
+function reviveRun(raw: SerialisedRow): Run {
+  return {
+    ...(raw as unknown as Run),
+    createdAt: date(raw.createdAt),
+    updatedAt: date(raw.updatedAt),
+    startedAt: maybeDate(raw.startedAt),
+    finishedAt: maybeDate(raw.finishedAt),
+  };
+}
+
+function reviveTask(raw: SerialisedRow): Task {
+  return {
+    ...(raw as unknown as Task),
+    createdAt: date(raw.createdAt),
+    updatedAt: date(raw.updatedAt),
+    finishedAt: maybeDate(raw.finishedAt),
+    leaseExpiresAt: maybeDate(raw.leaseExpiresAt),
+    runAfter: maybeDate(raw.runAfter),
+    requires: (raw.requires as string[] | undefined) ?? [],
+  };
+}
+
+function reviveAttempt(raw: SerialisedRow): TaskAttempt {
+  return {
+    ...(raw as unknown as TaskAttempt),
+    startedAt: date(raw.startedAt),
+    finishedAt: maybeDate(raw.finishedAt),
+  };
+}
+
+function reviveApproval(raw: SerialisedRow): Approval {
+  return {
+    ...(raw as unknown as Approval),
+    requestedAt: date(raw.requestedAt),
+    expiresAt: date(raw.expiresAt),
+    decidedAt: maybeDate(raw.decidedAt),
+  };
+}
+
+function reviveOutbox(raw: SerialisedRow): OutboxMessage {
+  return {
+    ...(raw as unknown as OutboxMessage),
+    nextAttemptAt: date(raw.nextAttemptAt),
+    createdAt: date(raw.createdAt),
+    deliveredAt: maybeDate(raw.deliveredAt),
+  };
 }
 
 class Tx implements StoreTx {

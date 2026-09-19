@@ -6,6 +6,7 @@
     "baseUrl": ".",
     "paths": {
       "@harness/core": ["../core/src/index.ts"],
+      "@harness/core/postgres": ["../core/src/postgres-entry.ts"],
       "@harness/odoo": ["../odoo/src/index.ts"]
     }
   },
