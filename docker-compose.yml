@@ -1,0 +1,97 @@
+# The whole system, locally.
+#
+#   docker compose up --build
+#
+#   API      http://localhost:3000   (/openapi.json for the route list)
+#   Console  http://localhost:3100
+#
+# The api and worker are the same image with a different ROLE. That is deliberate: a small
+# deployment runs one container that does both, and a larger one scales the workers
+# independently, with no code change between the two.
+
+name: harness
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: harness
+      POSTGRES_PASSWORD: harness
+      POSTGRES_DB: harness
+    ports:
+      - "5432:5432"
+    volumes:
+      - harness-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      # Other services wait for this, so a cold start does not produce a wall of
+      # connection errors before the database is ready.
+      test: ["CMD-SHELL", "pg_isready -U harness -d harness"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      ROLE: api
+      PORT: "3000"
+      DATABASE_URL: postgres://harness:harness@postgres:5432/harness
+      # Unset ODOO_* and ANTHROPIC_API_KEY, so the stub Odoo and the rules brain are used.
+      # Both report themselves at /health rather than pretending to be the real thing.
+      ODOO_URL: ${ODOO_URL:-}
+      ODOO_DB: ${ODOO_DB:-}
+      ODOO_USERNAME: ${ODOO_USERNAME:-}
+      ODOO_PASSWORD: ${ODOO_PASSWORD:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      ROLE: worker
+      DATABASE_URL: postgres://harness:harness@postgres:5432/harness
+      WORKER_CONCURRENCY: "4"
+      WORKER_LEASE_MS: "30000"
+      ODOO_URL: ${ODOO_URL:-}
+      ODOO_DB: ${ODOO_DB:-}
+      ODOO_USERNAME: ${ODOO_USERNAME:-}
+      ODOO_PASSWORD: ${ODOO_PASSWORD:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      api:
+        # The api migrates on boot, so a worker starting first would query tables that do
+        # not exist yet.
+        condition: service_healthy
+    # Two workers by default, because a single one hides every concurrency bug there is.
+    deploy:
+      replicas: 2
+    # Give a worker time to finish what it is holding. It stops leasing on SIGTERM and
+    # drains; killing it early turns a deploy into a recovery event.
+    stop_grace_period: 45s
+
+  console:
+    build:
+      context: .
+      dockerfile: Dockerfile.console
+    environment:
+      NODE_ENV: production
+    ports:
+      - "3100:3100"
+
+volumes:
+  harness-pgdata:

@@ -18,7 +18,7 @@ const config = [
     },
   },
   {
-    files: ["**/test/**/*.ts", "scripts/**/*.ts", "apps/api/src/server.ts", "apps/**/src/worker*.ts"],
+    files: ["**/test/**/*.ts", "scripts/**/*.ts", "apps/api/src/server.ts", "**/*-cli.ts"],
     rules: { "no-console": "off" },
   },
 ];

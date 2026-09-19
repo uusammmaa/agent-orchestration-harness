@@ -11,6 +11,7 @@ export default defineConfig({
   },
   resolve: {
     alias: {
+      "@harness/core/postgres": path.resolve(__dirname, "packages/core/src/postgres-entry.ts"),
       "@harness/core": path.resolve(__dirname, "packages/core/src/index.ts"),
       "@harness/odoo": path.resolve(__dirname, "packages/odoo/src/index.ts"),
       "@harness/agents": path.resolve(__dirname, "packages/agents/src/index.ts"),

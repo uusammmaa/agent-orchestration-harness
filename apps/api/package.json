@@ -1,0 +1,17 @@
+{
+  "name": "@harness/api",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "start": "tsx src/server.ts",
+    "dev": "tsx watch src/server.ts"
+  },
+  "dependencies": {
+    "@harness/agents": "*",
+    "@harness/core": "*",
+    "@harness/odoo": "*",
+    "zod": "^3.25.76"
+  }
+}

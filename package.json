@@ -4,8 +4,13 @@
   "private": true,
   "description": "A durable, approval-gated orchestration backend that coordinates LLM agents for accounts-receivable collections and lead follow-up, integrated with Odoo ERP.",
   "license": "MIT",
-  "engines": { "node": ">=20.9.0" },
-  "workspaces": ["packages/*", "apps/*"],
+  "engines": {
+    "node": ">=20.9.0"
+  },
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
   "scripts": {
     "build": "npm run build --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",

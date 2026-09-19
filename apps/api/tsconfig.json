@@ -1,0 +1,15 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": "../..",
+    "baseUrl": ".",
+    "paths": {
+      "@harness/core": ["../../packages/core/src/index.ts"],
+      "@harness/core/postgres": ["../../packages/core/src/postgres-entry.ts"],
+      "@harness/odoo": ["../../packages/odoo/src/index.ts"],
+      "@harness/agents": ["../../packages/agents/src/index.ts"]
+    }
+  },
+  "include": ["src/**/*.ts", "test/**/*.ts"]
+}
