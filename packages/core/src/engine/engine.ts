@@ -169,9 +169,15 @@ export class Engine {
         runId: run.id,
         key: definition.key,
         handler: definition.handler,
-        // A task with no dependencies is immediately ready; the rest wait.
-        status: (definition.dependsOn?.length ?? 0) === 0 ? "ready" : "pending",
+        /*
+         * Everything starts pending, including tasks with no dependencies. `advance()` is
+         * what promotes a task to ready, and promotion is also where its `input` is
+         * resolved and its `when` guard is evaluated. Creating a root task as ready
+         * directly would skip that step and hand the worker a task with an empty input.
+         */
+        status: "pending",
         dependsOn: definition.dependsOn ?? [],
+        requires: definition.requires ?? [],
         input: {},
         output: null,
         attempt: 0,
@@ -200,7 +206,7 @@ export class Engine {
       const started = await tx.updateRun(run.id, run.version, { status: "running", startedAt: now });
       await this.emit(tx, run.id, null, "run.started", actor, {});
 
-      // Resolve inputs and `when` for the tasks that are already ready.
+      // Promotes the root tasks, resolving their inputs and guards on the way.
       await this.advance(tx, run.id, actor);
       return (await tx.getRun(started.id)) ?? started;
     });
@@ -598,13 +604,47 @@ export class Engine {
     const workflow = this.workflows.get(run.workflow);
     if (!workflow) return;
 
-    let tasks = await tx.listTasks(runId);
+    /*
+     * Iterate to a fixed point.
+     *
+     * Skipping one task can settle the dependency of another, which can settle a third.
+     * A single pass over a snapshot only ever resolves the first of those, and the run
+     * then sits waiting for an advance() that will never be called — because nothing is
+     * going to complete and trigger one. Re-reading and repeating until nothing changes
+     * is what makes a cascade of skips resolve in one go.
+     *
+     * Bounded, because a bug that made this oscillate would otherwise hold a transaction
+     * open forever. One pass per task is comfortably enough.
+     */
+    let changed = true;
+    let passes = 0;
+    const maxPasses = workflow.tasks.length + 2;
+
+    while (changed && passes < maxPasses) {
+      changed = false;
+      passes++;
+      changed = await this.promoteReadyTasks(tx, run, workflow, actor);
+    }
+
+    await this.settleRunStatus(tx, runId, actor);
+  }
+
+  /** One pass of the promotion loop. Returns true when it changed anything. */
+  private async promoteReadyTasks(
+    tx: StoreTx,
+    run: Run,
+    workflow: WorkflowDefinition,
+    actor: string,
+  ): Promise<boolean> {
+    const runId = run.id;
+    const tasks = await tx.listTasks(runId);
     const outputs = Object.fromEntries(
       tasks.filter((task) => task.status === "succeeded" && task.output).map((task) => [task.key, task.output!]),
     ) as Record<string, Record<string, unknown>>;
 
     const context: WorkflowContext = { runId, input: run.input, outputs, labels: run.labels };
     const byKey = new Map(tasks.map((task) => [task.key, task]));
+    let changed = false;
 
     for (const task of tasks) {
       if (task.status !== "pending") continue;
@@ -612,35 +652,78 @@ export class Engine {
       const definition = workflow.tasks.find((candidate) => candidate.key === task.key);
       if (!definition) continue;
 
-      const dependencies = task.dependsOn.map((key) => byKey.get(key));
-      // A dependency that was skipped or rejected still counts as settled: the run should
-      // carry on without the branch, not hang waiting for something that will never come.
-      const settled = dependencies.every(
+      const upstream = [...task.dependsOn, ...task.requires].map((key) => byKey.get(key));
+
+      // A skipped dependency counts as settled: the run carries on without that branch
+      // rather than hanging on something that will never arrive.
+      const settled = upstream.every(
         (dependency) => dependency && (dependency.status === "succeeded" || dependency.status === "skipped"),
       );
       if (!settled) continue;
 
-      const blocked = dependencies.some(
+      // A failed or quarantined dependency leaves this task pending. The run is already
+      // failing; skipping here would hide which branch actually stopped.
+      const brokenUpstream = upstream.some(
         (dependency) =>
           dependency &&
           (dependency.status === "failed" ||
             dependency.status === "quarantined" ||
             dependency.status === "cancelled"),
       );
-      if (blocked) continue;
+      if (brokenUpstream) continue;
+
+      // A requirement that did not succeed skips this task. This is what stops a
+      // rejected or expired approval from being followed by the send it was gating.
+      const unmetRequirement = task.requires
+        .map((key) => byKey.get(key))
+        .find((dependency) => dependency && dependency.status !== "succeeded");
+
+      if (unmetRequirement) {
+        await tx.updateTask(task.id, task.version, { status: "skipped", finishedAt: this.now() });
+        await this.emit(tx, runId, task.id, "task.skipped", actor, {
+          key: task.key,
+          reason: `${unmetRequirement.key} did not succeed`,
+        });
+        changed = true;
+        continue;
+      }
 
       if (definition.when && !definition.when(context)) {
         await tx.updateTask(task.id, task.version, { status: "skipped", finishedAt: this.now() });
         await this.emit(tx, runId, task.id, "task.skipped", actor, { key: task.key, reason: "guard returned false" });
+        changed = true;
         continue;
       }
 
-      const input = definition.input ? definition.input(context) : {};
+      const input: Record<string, unknown> = definition.input ? definition.input(context) : {};
+
+      /*
+       * An approval gate's wording, roles and expiry are declared on the workflow, not in
+       * the handler. Resolving them here means the policy lives with the process it
+       * belongs to, and the handler stays generic.
+       */
+      if (definition.approval) {
+        input.summary = definition.approval.summary(context);
+        input.requiredRoles = definition.approval.requiredRoles;
+        input.expiresInHours = definition.approval.expiresInHours;
+        const source = task.dependsOn[task.dependsOn.length - 1];
+        input.draft = source ? (context.outputs[source] ?? {}) : {};
+      }
+
       await tx.updateTask(task.id, task.version, { status: "ready", ...(Object.keys(input).length ? { input } : {}) });
       await this.emit(tx, runId, task.id, "task.ready", actor, { key: task.key });
+      changed = true;
     }
 
-    tasks = await tx.listTasks(runId);
+    return changed;
+  }
+
+  /** Derive the run's status from its tasks, and record the transition if it moved. */
+  private async settleRunStatus(tx: StoreTx, runId: string, actor: string): Promise<void> {
+    const run = await tx.getRun(runId);
+    if (!run || isRunTerminal(run.status)) return;
+
+    const tasks = await tx.listTasks(runId);
     const derived = deriveRunStatus(
       tasks.map((task) => task.status),
       run.status,

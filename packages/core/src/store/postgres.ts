@@ -239,7 +239,7 @@ class PgTx implements StoreTx {
 
     // One multi-row insert rather than N round trips. With a dozen tasks per run that is
     // the difference between one network hop and twelve.
-    const columns = 17;
+    const columns = 18;
     const placeholders = tasks
       .map((_, index) => `(${Array.from({ length: columns }, (_, i) => `$${index * columns + i + 1}`).join(",")})`)
       .join(",");
@@ -251,6 +251,7 @@ class PgTx implements StoreTx {
       task.handler,
       task.status,
       task.dependsOn,
+      task.requires,
       JSON.stringify(task.input),
       task.output ? JSON.stringify(task.output) : null,
       task.attempt,
@@ -265,7 +266,7 @@ class PgTx implements StoreTx {
     ]);
 
     const rows = await this.query<TaskRow>(
-      `INSERT INTO tasks (id, run_id, key, handler, status, depends_on, input, output, attempt,
+      `INSERT INTO tasks (id, run_id, key, handler, status, depends_on, requires, input, output, attempt,
                           max_attempts, leased_by, lease_expires_at, run_after, approval_id,
                           version, created_at, updated_at)
        VALUES ${placeholders} RETURNING *`,
@@ -749,6 +750,7 @@ interface TaskRow {
   handler: string;
   status: string;
   depends_on: string[];
+  requires: string[];
   input: Record<string, unknown>;
   output: Record<string, unknown> | null;
   attempt: number;
@@ -772,6 +774,7 @@ function toTask(row: TaskRow): Task {
     handler: row.handler,
     status: row.status as Task["status"],
     dependsOn: row.depends_on,
+    requires: row.requires ?? [],
     input: row.input,
     output: row.output,
     attempt: row.attempt,

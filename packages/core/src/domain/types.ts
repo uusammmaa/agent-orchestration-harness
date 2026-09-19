@@ -74,8 +74,10 @@ export interface Task {
   /** Which agent or system handler executes it. */
   handler: string;
   status: TaskStatus;
-  /** Task keys that must succeed before this becomes ready. */
+  /** Task keys that must have settled before this becomes ready. */
   dependsOn: string[];
+  /** Task keys that must have *succeeded*. See TaskDefinition.requires. */
+  requires: string[];
   input: Record<string, unknown>;
   output: Record<string, unknown> | null;
   attempt: number;
@@ -224,7 +226,21 @@ export interface OutboxMessage {
 export interface TaskDefinition {
   key: string;
   handler: string;
+  /**
+   * Task keys that must have *settled* — succeeded or skipped — before this one runs.
+   * Use this for ordering when a skipped branch should not hold the run up.
+   */
   dependsOn?: string[];
+  /**
+   * Task keys that must have *succeeded*.
+   *
+   * The distinction matters most at an approval gate. A gate that was skipped because it
+   * was not needed should let the work through; a gate that was skipped because somebody
+   * rejected it must not. `dependsOn` cannot tell those apart, because both leave the
+   * task `skipped` — so anything that must not happen without a real success says so
+   * here, and is skipped in turn if its requirement was not met.
+   */
+  requires?: string[];
   maxAttempts?: number;
   /** Build this task's input from the run input and what earlier tasks produced. */
   input?: (context: WorkflowContext) => Record<string, unknown>;

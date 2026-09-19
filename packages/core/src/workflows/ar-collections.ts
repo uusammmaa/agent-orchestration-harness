@@ -133,7 +133,9 @@ export const arCollections: WorkflowDefinition = {
     {
       key: "send_message",
       handler: "effect.send_email",
-      dependsOn: ["approve_message"],
+      // `requires`, not `dependsOn`: a rejected or expired approval leaves the gate
+      // skipped, and nothing may go out on the strength of a decision nobody made.
+      requires: ["approve_message"],
       maxAttempts: 5,
       input: (context) => ({
         to: facts(context).partnerEmail,

@@ -337,7 +337,7 @@ export function seedStub(stub: OdooStub, today = new Date("2026-09-19T09:00:00.0
       email_from: "hello@wrenvale.example",
       phone: "",
       expected_revenue: 6_500,
-      probability: 25,
+      probability: 45,
       company_currency: [1, "GBP"],
       stage_id: [2, "Qualified"],
       date_last_stage_update: "2026-09-02 14:40:00",

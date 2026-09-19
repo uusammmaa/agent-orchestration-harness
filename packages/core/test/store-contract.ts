@@ -61,6 +61,7 @@ export function makeTask(runId: string, overrides: Partial<Task> = {}): Task {
     handler: "odoo.fetch_invoice",
     status: "ready",
     dependsOn: [],
+    requires: [],
     input: {},
     output: null,
     attempt: 0,

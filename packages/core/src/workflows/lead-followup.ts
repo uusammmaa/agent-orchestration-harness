@@ -17,7 +17,8 @@ import type { WorkflowContext, WorkflowDefinition } from "../domain/types";
  */
 
 interface LeadFacts {
-  leadId: number;
+  /** Odoo's own field name. `fetchLead` returns `id`, so this must match it. */
+  id: number;
   name: string;
   partnerName: string;
   email: string;
@@ -88,7 +89,7 @@ export const leadFollowup: WorkflowDefinition = {
       dependsOn: ["fetch_lead"],
       when: (context) => lead(context).touchCount >= MAX_TOUCHES && !lead(context).optedOut,
       input: (context) => ({
-        leadId: lead(context).leadId,
+        leadId: lead(context).id,
         stage: "Nurture",
         note: `No reply after ${lead(context).touchCount} approaches. Moved to nurture rather than chased again.`,
       }),
@@ -127,15 +128,16 @@ export const leadFollowup: WorkflowDefinition = {
     {
       key: "send_outreach",
       handler: "effect.send_email",
-      dependsOn: ["draft_outreach", "review_outreach"],
+      // The draft must exist; the review gate need only have settled. That asymmetry is
+      // the whole point of this workflow - review is conditional here, unlike collections.
+      requires: ["draft_outreach"],
+      dependsOn: ["review_outreach"],
       maxAttempts: 5,
-      // Runs when the review was approved, or when no review was needed and the gate was
-      // skipped. The dependency being settled either way is what makes both paths work.
       when: (context) => assessment(context).recommendation === "follow_up" && !lead(context).optedOut,
       input: (context) => ({
         to: lead(context).email,
         draft: context.outputs.review_outreach ?? context.outputs.draft_outreach ?? {},
-        leadId: lead(context).leadId,
+        leadId: lead(context).id,
       }),
     },
     {
@@ -145,7 +147,7 @@ export const leadFollowup: WorkflowDefinition = {
       maxAttempts: 5,
       input: (context) => ({
         model: "crm.lead",
-        recordId: lead(context).leadId,
+        recordId: lead(context).id,
         summary: "Follow-up sent",
         note: assessment(context).reasoning,
       }),

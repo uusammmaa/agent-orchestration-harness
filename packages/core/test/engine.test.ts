@@ -128,14 +128,17 @@ describe("starting a run", () => {
     const run = await h.engine.startRun({ workflow: "linear", subjectId: "s", input: {} });
     const events = await h.store.reads.listEvents(run.id);
 
+    // The trailing task.ready is the root task being promoted, which is where its input
+    // and its guard are resolved.
     expect(events.map((event) => event.type)).toEqual([
       "run.created",
       "task.created",
       "task.created",
       "task.created",
       "run.started",
+      "task.ready",
     ]);
-    expect(events.map((event) => event.sequence)).toEqual([1, 2, 3, 4, 5]);
+    expect(events.map((event) => event.sequence)).toEqual([1, 2, 3, 4, 5, 6]);
   });
 });
 
